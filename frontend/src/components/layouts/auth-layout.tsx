@@ -20,7 +20,7 @@ export const AuthLayout = ({ children, title }: LayoutProps) => {
 
 	useEffect(() => {
 		if (user.data) {
-			navigate(redirectTo ? redirectTo : paths.app.root.getHref(), {
+			navigate(redirectTo ? redirectTo : paths.home.getHref(), {
 				replace: true,
 			});
 		}

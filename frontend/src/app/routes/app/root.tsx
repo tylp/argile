@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useLogout } from "@/lib/auth";
+import { useNavigate } from "react-router";
 
 export const ErrorBoundary = () => {
 	return <div>Something went wrong!</div>;
@@ -8,6 +10,13 @@ export const ErrorBoundary = () => {
 
 const AppRoot = () => {
 	const [count, setCount] = useState(0);
+	const navigate = useNavigate();
+	const logout = useLogout({
+		onSuccess: () =>
+			navigate("/auth/login", {
+				replace: true,
+			}),
+	});
 
 	return (
 		<>
@@ -24,6 +33,13 @@ const AppRoot = () => {
 			<p className="read-the-docs">
 				Click on the Vite and React logos to learn more
 			</p>
+			<button
+				onClick={() => {
+					logout.mutate({});
+				}}
+			>
+				Logout
+			</button>
 		</>
 	);
 };

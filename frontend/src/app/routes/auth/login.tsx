@@ -14,7 +14,7 @@ function LoginRoute() {
 			<LoginForm
 				onSuccess={() => {
 					navigate(
-						`${redirectTo ? `${redirectTo}` : paths.app.root.getHref()}`,
+						`${redirectTo ? `${redirectTo}` : paths.home.getHref()}`,
 						{
 							replace: true,
 						}

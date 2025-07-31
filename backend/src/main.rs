@@ -7,16 +7,13 @@
 //! ```
 
 use axum::{
-    Json, RequestPartsExt, Router,
+    Json, Router,
     extract::FromRequestParts,
     http::{HeaderValue, StatusCode, request::Parts},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use axum_extra::{
-    TypedHeader,
-    headers::{Authorization, authorization::Bearer},
-};
+use chrono::{Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -26,32 +23,6 @@ use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-// Quick instructions
-//
-// - get an authorization token:
-//
-// curl -s \
-//     -w '\n' \
-//     -H 'Content-Type: application/json' \
-//     -d '{"client_id":"foo","client_secret":"bar"}' \
-//     http://localhost:3000/authorize
-//
-// - visit the protected area using the authorized token
-//
-// curl -s \
-//     -w '\n' \
-//     -H 'Content-Type: application/json' \
-//     -H 'Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJiQGIuY29tIiwiY29tcGFueSI6IkFDTUUiLCJleHAiOjEwMDAwMDAwMDAwfQ.M3LAZmrzUkXDC1q5mSzFAs_kJrwuKz3jOoDmjJ0G4gM' \
-//     http://localhost:3000/protected
-//
-// - try to visit the protected area using an invalid token
-//
-// curl -s \
-//     -w '\n' \
-//     -H 'Content-Type: application/json' \
-//     -H 'Authorization: Bearer blahblahblah' \
-//     http://localhost:3000/protected
 
 static KEYS: LazyLock<Keys> = LazyLock::new(|| {
     dotenv::dotenv().ok();
@@ -101,12 +72,14 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn me(claims: Claims) -> Result<Json<User>, AuthError> {
+async fn me(claims: Claims) -> Result<Json<AuthResponse>, AuthError> {
     // Here you can fetch the user data from a database using claims.sub
+
     let user = User {
-        username: claims.sub,
+        username: claims.iss,
     };
-    Ok(Json(user))
+
+    Ok(Json(AuthResponse { data: user }))
 }
 
 async fn login(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
@@ -114,15 +87,28 @@ async fn login(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthE
     if payload.username.is_empty() || payload.password.is_empty() {
         return Err(AuthError::MissingCredentials);
     }
-    // Here you can check the user credentials from a database
-    if payload.username != "tylp" || payload.password != "password" {
-        return Err(AuthError::WrongCredentials);
-    }
+
+    // Checkk auth with pam
+    let service = "login";
+    let username = payload.username.clone();
+    let password = payload.password.clone();
+
+    let mut client = pam::Client::with_password(service).map_err(|_| AuthError::PamError)?;
+    client
+        .conversation_mut()
+        .set_credentials(username, password);
+
+    client
+        .authenticate()
+        .map_err(|_| AuthError::WrongCredentials)?;
+
+    let iat = Utc::now().timestamp();
+    let exp = (Utc::now() + Duration::days(1)).timestamp();
+
     let claims = Claims {
-        sub: "b@b.com".to_owned(),
-        company: "ACME".to_owned(),
-        // Mandatory expiry time as UTC timestamp
-        exp: 2000000000, // May 2033
+        iss: payload.username.clone(),
+        exp,
+        iat,
     };
     // Create the authorization token
     let token = encode(&Header::default(), &claims, &KEYS.encoding)
@@ -141,7 +127,7 @@ async fn login(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthE
 
 impl Display for Claims {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Email: {}\nCompany: {}", self.sub, self.company)
+        write!(f, "Issuer: {}\nIssued At: {}", self.iss, self.iat)
     }
 }
 
@@ -162,16 +148,26 @@ where
     type Rejection = AuthError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Extract the token from the authorization header
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_| AuthError::InvalidToken)?;
-        // Decode the user data
-        let token_data = decode::<Claims>(bearer.token(), &KEYS.decoding, &Validation::default())
-            .map_err(|_| AuthError::InvalidToken)?;
+        // Verify the token contained in the cookie
+        if let Some(cookie) = parts.headers.get(axum::http::header::COOKIE) {
+            if let Ok(cookie_str) = cookie.to_str() {
+                for c in cookie_str.split(';') {
+                    if let Some((name, value)) = c.split_once('=') {
+                        if name.trim() == "access_token" {
+                            let token_data = decode::<Claims>(
+                                value.trim(),
+                                &KEYS.decoding,
+                                &Validation::default(),
+                            )
+                            .map_err(|_| AuthError::InvalidToken)?;
+                            return Ok(token_data.claims);
+                        }
+                    }
+                }
+            }
+        }
 
-        Ok(token_data.claims)
+        Err(AuthError::InvalidToken)
     }
 }
 
@@ -182,6 +178,7 @@ impl IntoResponse for AuthError {
             AuthError::MissingCredentials => (StatusCode::BAD_REQUEST, "Missing credentials"),
             AuthError::TokenCreation => (StatusCode::INTERNAL_SERVER_ERROR, "Token creation error"),
             AuthError::InvalidToken => (StatusCode::BAD_REQUEST, "Invalid token"),
+            AuthError::PamError => (StatusCode::UNAUTHORIZED, "PAM authentication error"),
         };
         let body = Json(json!({
             "error": error_message,
@@ -206,9 +203,14 @@ impl Keys {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
-    sub: String,
-    company: String,
-    exp: usize,
+    iss: String,
+    exp: i64,
+    iat: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AuthResponse {
+    data: User,
 }
 
 #[derive(Debug, Serialize)]
@@ -235,4 +237,5 @@ enum AuthError {
     MissingCredentials,
     TokenCreation,
     InvalidToken,
+    PamError,
 }

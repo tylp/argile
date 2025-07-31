@@ -4,7 +4,7 @@ import { z } from "zod";
 import { paths } from "@/config/paths";
 import type { AuthResponse, User } from "@/types/api";
 import { api } from "./api-client";
-import { useCookies } from "react-cookie";
+import { removeCookie, setCookie } from "typescript-cookie";
 
 const API_ROUTE = {
 	ME: "/auth/me",
@@ -17,10 +17,6 @@ const getUser = async (): Promise<User> => {
 	const response = await api.get(API_ROUTE.ME);
 
 	return response.data;
-};
-
-const logout = (): Promise<void> => {
-	return api.post(API_ROUTE.LOGOUT);
 };
 
 export const registerInputSchema = z
@@ -68,14 +64,21 @@ const authConfig = {
 	userFn: getUser,
 	loginFn: async (data: LoginInput) => {
 		const response = await loginWithUsernameAndPassword(data);
-		console.log("Login response:", response);
+
+		const date = new Date();
+		date.setTime(date.getTime() + 60 * 60 * 1000); // Set cookie to expire in 1 hour
+
+		setCookie("access_token", response.access_token, { expires: date });
+
 		return response.user;
 	},
 	registerFn: async (data: RegisterInput) => {
 		const response = await registerWithEmailAndPassword(data);
 		return response.user;
 	},
-	logoutFn: logout,
+	logoutFn: async () => {
+		removeCookie("access_token", { path: "" });
+	},
 };
 
 export const { useUser, useLogin, useLogout, AuthLoader } =
@@ -85,8 +88,11 @@ export const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 	const user = useUser();
 	const location = useLocation();
 
+	if (user.isLoading) {
+		return <p>Loading...</p>;
+	}
+
 	if (!user.data) {
-		console.log("User not authenticated, redirecting to login");
 		return (
 			<Navigate
 				to={paths.auth.login.getHref(location.pathname)}
