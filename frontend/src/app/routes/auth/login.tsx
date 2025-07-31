@@ -10,7 +10,7 @@ function LoginRoute() {
 	const redirectTo = searchParams.get("redirectTo");
 
 	return (
-		<AuthLayout title="Log in to your account">
+		<AuthLayout title="Log in">
 			<LoginForm
 				onSuccess={() => {
 					navigate(
