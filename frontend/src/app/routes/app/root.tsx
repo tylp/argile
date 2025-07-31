@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useLogout } from "@/lib/auth";
 import { useNavigate } from "react-router";
+import { MainLayout } from "@/components/layouts/main-layout";
 
 export const ErrorBoundary = () => {
 	return <div>Something went wrong!</div>;
@@ -19,7 +20,7 @@ const AppRoot = () => {
 	});
 
 	return (
-		<>
+		<MainLayout>
 			<ThemeToggle />
 			<h1>Vite + React</h1>
 			<div className="card">
@@ -40,7 +41,7 @@ const AppRoot = () => {
 			>
 				Logout
 			</button>
-		</>
+		</MainLayout>
 	);
 };
 
